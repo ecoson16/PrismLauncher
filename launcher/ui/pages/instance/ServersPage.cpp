@@ -53,6 +53,7 @@
 #include <tasks/ConcurrentTask.h>
 #include <QFileSystemWatcher>
 #include <QMenu>
+#include <algorithm>
 #include <QTimer>
 
 static const int COLUMN_COUNT = 3;  // 3 , TBD: latency and other nice things.
@@ -579,6 +580,7 @@ ServersPage::ServersPage(MinecraftInstance* inst, QWidget* parent) : QMainWindow
 
     auto selectionModel = ui->serversView->selectionModel();
     connect(selectionModel, &QItemSelectionModel::currentChanged, this, &ServersPage::currentChanged);
+    connect(selectionModel, &QItemSelectionModel::selectionChanged, this, [this] { updateState(); });
     connect(m_inst, &MinecraftInstance::runningStatusChanged, this, &ServersPage::runningStateChanged);
     connect(ui->nameLine, &QLineEdit::textEdited, this, &ServersPage::nameEdited);
     connect(ui->addressLine, &QLineEdit::textEdited, this, &ServersPage::addressEdited);
@@ -634,14 +636,13 @@ void ServersPage::runningStateChanged(bool running)
 
 void ServersPage::currentChanged(const QModelIndex& current, [[maybe_unused]] const QModelIndex& previous)
 {
-    int nextServer = -1;
-    if (!current.isValid()) {
-        nextServer = -1;
-    } else {
-        nextServer = current.row();
-    }
-    currentServer = nextServer;
+    currentServer = current.isValid() ? current.row() : -1;
     updateState();
+}
+
+QModelIndexList ServersPage::selectedServers() const
+{
+    return ui->serversView->selectionModel()->selectedRows();
 }
 
 // WARNING: this is here because currentChanged is not accurate when removing rows. the current item needs to be fixed up after removal.
@@ -678,18 +679,21 @@ void ServersPage::resourceIndexChanged(int index)
 
 void ServersPage::updateState()
 {
-    auto server = m_model->at(currentServer);
+    const auto selected = selectedServers();
+    const bool hasSelection = !selected.isEmpty();
+    const bool singleSelection = selected.size() == 1;
+    const auto server = m_model->at(currentServer);
+    const bool serverEditEnabled = server && singleSelection && !m_locked;
 
-    bool serverEditEnabled = server && !m_locked;
     ui->addressLine->setEnabled(serverEditEnabled);
     ui->nameLine->setEnabled(serverEditEnabled);
     ui->resourceComboBox->setEnabled(serverEditEnabled);
     ui->actionMove_Down->setEnabled(serverEditEnabled);
     ui->actionMove_Up->setEnabled(serverEditEnabled);
-    ui->actionRemove->setEnabled(serverEditEnabled);
+    ui->actionRemove->setEnabled(hasSelection && !m_locked);
     ui->actionJoin->setEnabled(serverEditEnabled);
 
-    if (server) {
+    if (server && singleSelection) {
         ui->addressLine->setText(server->m_address);
         ui->nameLine->setText(server->m_name);
         ui->resourceComboBox->setCurrentIndex(int(server->m_acceptsTextures));
@@ -729,19 +733,41 @@ void ServersPage::on_actionAdd_triggered()
 
 void ServersPage::on_actionRemove_triggered()
 {
-    auto response =
-        CustomMessageBox::selectable(this, tr("Confirm Removal"),
-                                     tr("You are about to remove \"%1\".\n"
-                                        "This is permanent and the server will be gone from your list forever (A LONG TIME).\n\n"
-                                        "Are you sure?")
-                                         .arg(m_model->at(currentServer)->m_name),
-                                     QMessageBox::Warning, QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
-            ->exec();
-
-    if (response != QMessageBox::Yes)
+    const auto selected = selectedServers();
+    if (selected.isEmpty() || m_locked) {
         return;
+    }
 
-    m_model->removeRow(currentServer);
+    QString message;
+    if (selected.size() == 1) {
+        message = tr("You are about to remove \"%1\".\n"
+                     "This is permanent and the server will be gone from your list forever (A LONG TIME).\n\n"
+                     "Are you sure?")
+                      .arg(m_model->at(selected.first().row())->m_name);
+    } else {
+        message = tr("You are about to remove %1 servers.\n"
+                     "This is permanent and the servers will be gone from your list forever (A LONG TIME).\n\n"
+                     "Are you sure?")
+                      .arg(selected.size());
+    }
+
+    const auto response = CustomMessageBox::selectable(this, tr("Confirm Removal"), message, QMessageBox::Warning,
+                                                       QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                              ->exec();
+    if (response != QMessageBox::Yes) {
+        return;
+    }
+
+    QList<int> rows;
+    rows.reserve(selected.size());
+    for (const auto& index : selected) {
+        rows.append(index.row());
+    }
+    std::sort(rows.rbegin(), rows.rend());
+
+    for (const int row : rows) {
+        m_model->removeRow(row);
+    }
 }
 
 void ServersPage::on_actionMove_Up_triggered()

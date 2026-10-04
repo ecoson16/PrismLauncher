@@ -71,6 +71,7 @@ class ServersPage : public QMainWindow, public BasePage {
 
    private:
     void updateState();
+    QModelIndexList selectedServers() const;
     void scheduleSave();
     bool saveIsScheduled() const;
 

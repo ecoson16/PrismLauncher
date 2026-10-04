@@ -73,6 +73,7 @@ class WorldListPage : public QMainWindow, public BasePage {
 
    private:
     QModelIndex getSelectedWorld();
+    QModelIndexList getSelectedWorlds();
     bool isWorldSafe(QModelIndex index);
     bool worldSafetyNagQuestion(const QString& actionType);
     void populateWorldToolsMenu();
